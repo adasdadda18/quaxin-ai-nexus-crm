@@ -1,13 +1,38 @@
 
-import { Search, Bell, Settings } from "lucide-react";
+import { Search, Bell, Settings, LogOut } from "lucide-react";
+import { Link } from "react-router-dom";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { useAuth } from "@/contexts/AuthContext";
+import { 
+  DropdownMenu, 
+  DropdownMenuContent, 
+  DropdownMenuItem, 
+  DropdownMenuLabel, 
+  DropdownMenuSeparator, 
+  DropdownMenuTrigger 
+} from "@/components/ui/dropdown-menu";
 
 const TopNavbar = () => {
   const isMobile = useIsMobile();
+  const { user, signOut } = useAuth();
 
+  const getInitials = (name: string) => {
+    if (!name) return "U";
+    return name
+      .split(" ")
+      .map((n) => n[0])
+      .join("")
+      .toUpperCase()
+      .substring(0, 2);
+  };
+
+  const displayName = user?.user_metadata?.display_name || user?.email || "User";
+  const initials = getInitials(displayName);
+  
   return (
     <header className="border-b border-border h-16 px-4 flex items-center justify-between">
       <div className="flex items-center w-full md:w-auto">
@@ -70,9 +95,43 @@ const TopNavbar = () => {
           </PopoverContent>
         </Popover>
         
-        <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center">
-          <span className="text-sm font-medium">NN</span>
-        </div>
+        {user ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" className="relative h-8 w-8 rounded-full">
+                <Avatar className="h-8 w-8">
+                  <AvatarImage src={user.user_metadata?.avatar_url} alt={displayName} />
+                  <AvatarFallback>{initials}</AvatarFallback>
+                </Avatar>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent className="w-56" align="end" forceMount>
+              <DropdownMenuLabel className="font-normal">
+                <div className="flex flex-col space-y-1">
+                  <p className="text-sm font-medium leading-none">{displayName}</p>
+                  <p className="text-xs leading-none text-muted-foreground">
+                    {user.email}
+                  </p>
+                </div>
+              </DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem asChild>
+                <Link to="/settings">
+                  <Settings className="mr-2 h-4 w-4" />
+                  <span>Cài đặt</span>
+                </Link>
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => signOut()}>
+                <LogOut className="mr-2 h-4 w-4" />
+                <span>Đăng xuất</span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : (
+          <Button variant="outline" size="sm" asChild>
+            <Link to="/auth">Đăng nhập</Link>
+          </Button>
+        )}
       </div>
     </header>
   );
