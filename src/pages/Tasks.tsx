@@ -9,8 +9,14 @@ import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import * as z from "zod";
 import { toast } from "@/hooks/use-toast";
-import { getApiKey, generateTaskSuggestions } from "@/services/aiService";
+import { getApiKey, generateTaskSuggestions, analyzeTaskPriorities, getRelatedTasks } from "@/services/aiService";
 import { 
   CheckSquare, 
   Plus, 
@@ -24,7 +30,15 @@ import {
   Calendar as CalendarIcon,
   CheckCircle2,
   AlertCircle,
-  ArrowRight
+  ArrowRight,
+  Trash2,
+  Brain,
+  Link,
+  Lightbulb,
+  Award,
+  PartyPopper,
+  Trophy,
+  Pencil
 } from "lucide-react";
 
 // Task type definition
@@ -38,7 +52,19 @@ interface Task {
   aiSuggested: boolean;
   description?: string;
   assignedTo?: string;
+  aiScore?: number;
+  aiReason?: string;
 }
+
+// Form schema for adding/editing tasks
+const taskFormSchema = z.object({
+  title: z.string().min(3, { message: "Tiêu đề phải có ít nhất 3 ký tự" }),
+  priority: z.enum(['high', 'medium', 'normal', 'low']),
+  dueDate: z.string(),
+  category: z.string(),
+  description: z.string().optional(),
+  assignedTo: z.string().optional()
+});
 
 // Initial mock tasks
 const initialTasks: Task[] = [
@@ -123,12 +149,60 @@ const Tasks = () => {
   const [loading, setLoading] = useState(false);
   const [apiKeyConfigured, setApiKeyConfigured] = useState(false);
   const [activeTab, setActiveTab] = useState("all");
+  const [isAddTaskOpen, setIsAddTaskOpen] = useState(false);
+  const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [relatedTasks, setRelatedTasks] = useState<{taskId: string, suggestions: string[]}[]>([]);
+  const [showCompletionAnimation, setShowCompletionAnimation] = useState(false);
+  const [completedTaskCount, setCompletedTaskCount] = useState(0);
+  const [aiAnalysisLoading, setAiAnalysisLoading] = useState(false);
+
+  // Initialize form
+  const form = useForm<z.infer<typeof taskFormSchema>>({
+    resolver: zodResolver(taskFormSchema),
+    defaultValues: {
+      title: "",
+      priority: "normal",
+      dueDate: "",
+      category: "",
+      description: "",
+      assignedTo: ""
+    }
+  });
 
   // Check if API key is configured
   useEffect(() => {
     const hasApiKey = !!getApiKey();
     setApiKeyConfigured(hasApiKey);
   }, []);
+
+  // Track completed tasks count for celebration
+  useEffect(() => {
+    const completed = tasks.filter(task => task.completed).length;
+    setCompletedTaskCount(completed);
+  }, [tasks]);
+
+  // Reset form when editingTask changes
+  useEffect(() => {
+    if (editingTask) {
+      form.reset({
+        title: editingTask.title,
+        priority: editingTask.priority,
+        dueDate: editingTask.dueDate,
+        category: editingTask.category,
+        description: editingTask.description || "",
+        assignedTo: editingTask.assignedTo || ""
+      });
+    } else {
+      form.reset({
+        title: "",
+        priority: "normal",
+        dueDate: "",
+        category: "",
+        description: "",
+        assignedTo: ""
+      });
+    }
+  }, [editingTask, form]);
 
   // Apply filters and sorting
   useEffect(() => {
@@ -193,6 +267,13 @@ const Tasks = () => {
     );
 
     if (isChecked) {
+      // Show celebration animation every 3 completed tasks
+      const newCompletedCount = completedTaskCount + 1;
+      if (newCompletedCount % 3 === 0) {
+        setShowCompletionAnimation(true);
+        setTimeout(() => setShowCompletionAnimation(false), 3000);
+      }
+      
       toast({
         title: "Nhiệm vụ hoàn thành",
         description: "Nhiệm vụ đã được đánh dấu là hoàn thành",
@@ -259,6 +340,115 @@ const Tasks = () => {
     }
   };
 
+  // AI analysis of task priorities
+  const analyzeTasksWithAI = async () => {
+    if (!apiKeyConfigured) {
+      toast({
+        title: "API key chưa được cấu hình",
+        description: "Vui lòng cấu hình OpenAI API key trong phần Cài đặt",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setAiAnalysisLoading(true);
+    try {
+      // Only analyze incomplete tasks
+      const incompleteTasks = tasks.filter(task => !task.completed);
+      if (incompleteTasks.length === 0) {
+        toast({
+          title: "Không có nhiệm vụ cần phân tích",
+          description: "Tất cả nhiệm vụ đã hoàn thành hoặc không có nhiệm vụ nào.",
+        });
+        return;
+      }
+
+      const analyzedTasks = await analyzeTaskPriorities(incompleteTasks);
+      
+      // Update tasks with AI scores and reasons
+      setTasks(prevTasks => 
+        prevTasks.map(task => {
+          const analyzed = analyzedTasks.find(a => a.id === task.id);
+          if (analyzed) {
+            return { 
+              ...task, 
+              priority: analyzed.suggestedPriority, 
+              aiScore: analyzed.score,
+              aiReason: analyzed.reason
+            };
+          }
+          return task;
+        })
+      );
+      
+      toast({
+        title: "Phân tích nhiệm vụ hoàn tất",
+        description: `AI đã phân tích và cập nhật ưu tiên cho ${analyzedTasks.length} nhiệm vụ`,
+      });
+    } catch (error) {
+      console.error("Error analyzing tasks:", error);
+      toast({
+        title: "Lỗi",
+        description: "Không thể phân tích nhiệm vụ. Vui lòng thử lại sau.",
+        variant: "destructive",
+      });
+    } finally {
+      setAiAnalysisLoading(false);
+    }
+  };
+
+  // Generate related tasks
+  const findRelatedTasks = async (taskId: string) => {
+    if (!apiKeyConfigured) {
+      toast({
+        title: "API key chưa được cấu hình",
+        description: "Vui lòng cấu hình OpenAI API key trong phần Cài đặt",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const task = tasks.find(t => t.id === taskId);
+    if (!task) return;
+
+    try {
+      const suggestions = await getRelatedTasks(task);
+      
+      setRelatedTasks(prev => {
+        // Remove any existing related tasks for this taskId
+        const filtered = prev.filter(item => item.taskId !== taskId);
+        return [...filtered, { taskId, suggestions }];
+      });
+      
+    } catch (error) {
+      console.error("Error getting related tasks:", error);
+      toast({
+        title: "Lỗi",
+        description: "Không thể tìm nhiệm vụ liên quan. Vui lòng thử lại sau.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // Add related task as a new task
+  const addRelatedTask = (suggestion: string, category: string) => {
+    const newTask: Task = {
+      id: `task-${Date.now()}`,
+      title: suggestion,
+      priority: "normal",
+      dueDate: "Chưa có thời hạn",
+      category: category,
+      completed: false,
+      aiSuggested: true
+    };
+    
+    setTasks(prev => [newTask, ...prev]);
+    toast({
+      title: "Đã thêm nhiệm vụ liên quan",
+      description: "Nhiệm vụ mới đã được thêm vào danh sách",
+    });
+  };
+
   // Delete task
   const handleDeleteTask = (taskId: string) => {
     setTasks(prevTasks => prevTasks.filter(task => task.id !== taskId));
@@ -307,24 +497,42 @@ const Tasks = () => {
     }
   };
 
-  // Add new task
-  const handleAddTask = () => {
-    // In a real application, you would open a form or modal to add a new task
-    const newTask: Task = {
-      id: `task-${Date.now()}`,
-      title: "Nhiệm vụ mới",
-      priority: "normal",
-      dueDate: "Chưa có thời hạn",
-      category: "Khác",
-      completed: false,
-      aiSuggested: false
-    };
+  // Add/Edit task submission
+  const onSubmit = (data: z.infer<typeof taskFormSchema>) => {
+    if (editingTask) {
+      // Update existing task
+      setTasks(prev => prev.map(task => 
+        task.id === editingTask.id 
+          ? { ...task, ...data } 
+          : task
+      ));
+      toast({
+        title: "Đã cập nhật nhiệm vụ",
+        description: "Nhiệm vụ đã được cập nhật thành công",
+      });
+    } else {
+      // Add new task
+      const newTask: Task = {
+        id: `task-${Date.now()}`,
+        title: data.title,
+        priority: data.priority,
+        dueDate: data.dueDate || "Chưa có thời hạn",
+        category: data.category || "Khác",
+        completed: false,
+        aiSuggested: false,
+        description: data.description,
+        assignedTo: data.assignedTo
+      };
+      
+      setTasks(prev => [newTask, ...prev]);
+      toast({
+        title: "Đã thêm nhiệm vụ mới",
+        description: "Nhiệm vụ mới đã được thêm vào danh sách",
+      });
+    }
     
-    setTasks(prev => [newTask, ...prev]);
-    toast({
-      title: "Đã thêm nhiệm vụ mới",
-      description: "Hãy chỉnh sửa chi tiết cho nhiệm vụ mới của bạn",
-    });
+    setIsAddTaskOpen(false);
+    setEditingTask(null);
   };
 
   // Get stats for the overview cards
@@ -346,10 +554,166 @@ const Tasks = () => {
             </p>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" onClick={handleAddTask}>
-              <Plus className="h-4 w-4 mr-1" />
-              Thêm nhiệm vụ
+            <Dialog open={isAddTaskOpen} onOpenChange={setIsAddTaskOpen}>
+              <DialogTrigger asChild>
+                <Button variant="outline" onClick={() => {
+                  setEditingTask(null);
+                  setIsAddTaskOpen(true);
+                }}>
+                  <Plus className="h-4 w-4 mr-1" />
+                  Thêm nhiệm vụ
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="sm:max-w-[500px]">
+                <DialogHeader>
+                  <DialogTitle>{editingTask ? "Chỉnh sửa nhiệm vụ" : "Thêm nhiệm vụ mới"}</DialogTitle>
+                  <DialogDescription>
+                    {editingTask 
+                      ? "Cập nhật thông tin cho nhiệm vụ này." 
+                      : "Điền thông tin cho nhiệm vụ mới của bạn."}
+                  </DialogDescription>
+                </DialogHeader>
+                <Form {...form}>
+                  <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+                    <FormField
+                      control={form.control}
+                      name="title"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Tiêu đề nhiệm vụ</FormLabel>
+                          <FormControl>
+                            <Input placeholder="Nhập tiêu đề nhiệm vụ" {...field} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <FormField
+                        control={form.control}
+                        name="priority"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Mức độ ưu tiên</FormLabel>
+                            <Select 
+                              onValueChange={field.onChange} 
+                              defaultValue={field.value}
+                            >
+                              <FormControl>
+                                <SelectTrigger>
+                                  <SelectValue placeholder="Chọn mức độ ưu tiên" />
+                                </SelectTrigger>
+                              </FormControl>
+                              <SelectContent>
+                                <SelectItem value="high">Cao</SelectItem>
+                                <SelectItem value="medium">Trung bình</SelectItem>
+                                <SelectItem value="normal">Thông thường</SelectItem>
+                                <SelectItem value="low">Thấp</SelectItem>
+                              </SelectContent>
+                            </Select>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      
+                      <FormField
+                        control={form.control}
+                        name="dueDate"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Thời hạn</FormLabel>
+                            <FormControl>
+                              <Input placeholder="Ví dụ: Hôm nay, 15:00" {...field} />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </div>
+                    
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <FormField
+                        control={form.control}
+                        name="category"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Danh mục</FormLabel>
+                            <Select 
+                              onValueChange={field.onChange} 
+                              defaultValue={field.value}
+                            >
+                              <FormControl>
+                                <SelectTrigger>
+                                  <SelectValue placeholder="Chọn danh mục" />
+                                </SelectTrigger>
+                              </FormControl>
+                              <SelectContent>
+                                {categories.map((category) => (
+                                  <SelectItem key={category} value={category}>
+                                    {category}
+                                  </SelectItem>
+                                ))}
+                                <SelectItem value="Khác">Khác</SelectItem>
+                              </SelectContent>
+                            </Select>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      
+                      <FormField
+                        control={form.control}
+                        name="assignedTo"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Người phụ trách</FormLabel>
+                            <FormControl>
+                              <Input placeholder="Ví dụ: Nguyễn Văn A" {...field} />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </div>
+                    
+                    <FormField
+                      control={form.control}
+                      name="description"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Mô tả</FormLabel>
+                          <FormControl>
+                            <Textarea 
+                              placeholder="Nhập mô tả chi tiết về nhiệm vụ này" 
+                              className="min-h-[100px]" 
+                              {...field} 
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    
+                    <DialogFooter>
+                      <Button type="submit">
+                        {editingTask ? "Cập nhật" : "Thêm mới"}
+                      </Button>
+                    </DialogFooter>
+                  </form>
+                </Form>
+              </DialogContent>
+            </Dialog>
+            
+            <Button 
+              onClick={analyzeTasksWithAI}
+              disabled={aiAnalysisLoading}
+              className="flex items-center gap-1 bg-blue-600 hover:bg-blue-700"
+            >
+              <Brain className={`h-4 w-4 ${aiAnalysisLoading ? 'animate-spin' : ''}`} />
+              AI Phân tích
             </Button>
+            
             <Button 
               onClick={generateAiTasks}
               disabled={loading}
@@ -360,6 +724,24 @@ const Tasks = () => {
             </Button>
           </div>
         </div>
+
+        {/* Completion Animation */}
+        {showCompletionAnimation && (
+          <div className="fixed inset-0 flex items-center justify-center z-50 bg-black/50 backdrop-blur-sm">
+            <div className="bg-background p-8 rounded-lg shadow-xl animate-scale-in flex flex-col items-center max-w-md">
+              <div className="mb-4 text-yellow-500 animate-bounce">
+                <Trophy className="h-16 w-16" />
+              </div>
+              <h2 className="text-2xl font-bold mb-2">Tuyệt vời!</h2>
+              <p className="text-center mb-4">
+                Bạn đã hoàn thành {completedTaskCount} nhiệm vụ. Hãy tiếp tục phát huy!
+              </p>
+              <Button onClick={() => setShowCompletionAnimation(false)}>
+                Tiếp tục
+              </Button>
+            </div>
+          </div>
+        )}
 
         {/* Overview Cards */}
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
@@ -446,6 +828,7 @@ const Tasks = () => {
                       onClick={handleBatchDelete}
                       className="h-8 text-destructive hover:text-destructive"
                     >
+                      <Trash2 className="h-3.5 w-3.5 mr-1" />
                       Xóa
                     </Button>
                   </div>
@@ -548,96 +931,142 @@ const Tasks = () => {
                     <Button 
                       variant="outline" 
                       className="mt-4"
-                      onClick={searchQuery ? () => setSearchQuery("") : handleAddTask}
+                      onClick={searchQuery ? () => setSearchQuery("") : () => setIsAddTaskOpen(true)}
                     >
                       {searchQuery ? "Xóa bộ lọc" : "Thêm nhiệm vụ mới"}
                     </Button>
                   </div>
                 ) : (
                   filteredTasks.map((task) => (
-                    <div 
-                      key={task.id} 
-                      className={`grid grid-cols-12 gap-4 p-3 rounded-md hover:bg-muted/50 transition-colors ${task.completed ? 'bg-muted/30' : ''}`}
-                    >
-                      <div className="col-span-1 flex items-center">
-                        <Checkbox 
-                          id={`select-${task.id}`}
-                          checked={selectedTasks.includes(task.id)}
-                          onCheckedChange={(checked) => handleSelectTask(task.id, checked as boolean)}
-                          className="mr-2"
-                        />
-                        <Checkbox 
-                          id={task.id}
-                          checked={task.completed}
-                          onCheckedChange={(checked) => handleTaskComplete(task.id, checked as boolean)}
-                        />
-                      </div>
-                      
-                      <div className="col-span-5 sm:col-span-4">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <label
-                            htmlFor={task.id}
-                            className={`text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer ${task.completed ? 'line-through text-muted-foreground' : ''}`}
-                          >
-                            {task.title}
-                          </label>
-                          {task.aiSuggested && (
-                            <span className="inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-semibold bg-quaxin-light/30 text-quaxin-primary border-quaxin-primary/30">
-                              <Sparkles className="h-2.5 w-2.5 mr-1" />
-                              AI
-                            </span>
+                    <div key={task.id}>
+                      <div 
+                        className={`grid grid-cols-12 gap-4 p-3 rounded-md hover:bg-muted/50 transition-colors ${task.completed ? 'bg-muted/30' : ''}`}
+                      >
+                        <div className="col-span-1 flex items-center">
+                          <Checkbox 
+                            id={`select-${task.id}`}
+                            checked={selectedTasks.includes(task.id)}
+                            onCheckedChange={(checked) => handleSelectTask(task.id, checked as boolean)}
+                            className="mr-2"
+                          />
+                          <Checkbox 
+                            id={task.id}
+                            checked={task.completed}
+                            onCheckedChange={(checked) => handleTaskComplete(task.id, checked as boolean)}
+                          />
+                        </div>
+                        
+                        <div className="col-span-5 sm:col-span-4">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <label
+                              htmlFor={task.id}
+                              className={`text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer ${task.completed ? 'line-through text-muted-foreground' : ''}`}
+                            >
+                              {task.title}
+                            </label>
+                            {task.aiSuggested && (
+                              <span className="inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-semibold bg-quaxin-light/30 text-quaxin-primary border-quaxin-primary/30">
+                                <Sparkles className="h-2.5 w-2.5 mr-1" />
+                                AI
+                              </span>
+                            )}
+                            {task.aiScore && (
+                              <span className="inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-semibold bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300 border-blue-200">
+                                <Brain className="h-2.5 w-2.5 mr-1" />
+                                Điểm: {task.aiScore}
+                              </span>
+                            )}
+                          </div>
+                          {task.assignedTo && (
+                            <div className="text-xs text-muted-foreground mt-1 hidden sm:block">
+                              {task.assignedTo}
+                            </div>
+                          )}
+                          {task.aiReason && (
+                            <div className="text-xs text-muted-foreground mt-1 hidden sm:block italic">
+                              "{task.aiReason}"
+                            </div>
                           )}
                         </div>
-                        {task.assignedTo && (
-                          <div className="text-xs text-muted-foreground mt-1 hidden sm:block">
-                            {task.assignedTo}
+                        
+                        <div className="col-span-3 hidden sm:block">
+                          <Badge variant="outline">
+                            {task.category}
+                          </Badge>
+                        </div>
+                        
+                        <div className="col-span-3 sm:col-span-2">
+                          <Badge className={priorityColors[task.priority]}>
+                            {task.priority === 'high' ? 'Cao' : task.priority === 'medium' ? 'Trung bình' : task.priority === 'normal' ? 'Thông thường' : 'Thấp'}
+                          </Badge>
+                        </div>
+                        
+                        <div className="col-span-2 sm:col-span-1 hidden sm:flex items-center text-xs text-muted-foreground">
+                          <Clock className="h-3 w-3 mr-1 flex-shrink-0" />
+                          <span className="truncate">{task.dueDate}</span>
+                        </div>
+                        
+                        <div className="col-span-1 flex justify-end items-center">
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button variant="ghost" size="icon" className="h-8 w-8">
+                                <MoreHorizontal className="h-4 w-4" />
+                                <span className="sr-only">Thao tác</span>
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem onClick={() => {
+                                setEditingTask(task);
+                                setIsAddTaskOpen(true);
+                              }}>
+                                <Pencil className="h-4 w-4 mr-2" />
+                                Chỉnh sửa
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => handleTaskComplete(task.id, !task.completed)}>
+                                <CheckCircle2 className="h-4 w-4 mr-2" />
+                                {task.completed ? "Đánh dấu chưa hoàn thành" : "Đánh dấu hoàn thành"}
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => findRelatedTasks(task.id)}>
+                                <Link className="h-4 w-4 mr-2" />
+                                Tìm nhiệm vụ liên quan
+                              </DropdownMenuItem>
+                              <DropdownMenuItem 
+                                className="text-destructive"
+                                onClick={() => handleDeleteTask(task.id)}
+                              >
+                                <Trash2 className="h-4 w-4 mr-2" />
+                                Xóa
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </div>
+                      </div>
+                      
+                      {/* Related Tasks Section */}
+                      {relatedTasks.find(rt => rt.taskId === task.id) && (
+                        <div className="ml-10 pl-4 border-l-2 border-dashed border-muted my-2">
+                          <div className="text-xs font-medium text-muted-foreground mb-1 flex items-center">
+                            <Lightbulb className="h-3.5 w-3.5 mr-1" />
+                            Nhiệm vụ liên quan:
                           </div>
-                        )}
-                      </div>
-                      
-                      <div className="col-span-3 hidden sm:block">
-                        <Badge variant="outline">
-                          {task.category}
-                        </Badge>
-                      </div>
-                      
-                      <div className="col-span-3 sm:col-span-2">
-                        <Badge className={priorityColors[task.priority]}>
-                          {task.priority === 'high' ? 'Cao' : task.priority === 'medium' ? 'Trung bình' : 'Thông thường'}
-                        </Badge>
-                      </div>
-                      
-                      <div className="col-span-2 sm:col-span-1 hidden sm:flex items-center text-xs text-muted-foreground">
-                        <Clock className="h-3 w-3 mr-1 flex-shrink-0" />
-                        <span className="truncate">{task.dueDate}</span>
-                      </div>
-                      
-                      <div className="col-span-1 flex justify-end items-center">
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-8 w-8">
-                              <MoreHorizontal className="h-4 w-4" />
-                              <span className="sr-only">Thao tác</span>
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem>
-                              <CheckCircle2 className="h-4 w-4 mr-2" />
-                              Đánh dấu hoàn thành
-                            </DropdownMenuItem>
-                            <DropdownMenuItem>
-                              <CalendarIcon className="h-4 w-4 mr-2" />
-                              Đặt lại thời hạn
-                            </DropdownMenuItem>
-                            <DropdownMenuItem 
-                              className="text-destructive"
-                              onClick={() => handleDeleteTask(task.id)}
-                            >
-                              Xóa
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </div>
+                          <div className="space-y-1">
+                            {relatedTasks.find(rt => rt.taskId === task.id)?.suggestions.map((suggestion, index) => (
+                              <div key={index} className="flex items-center justify-between rounded-md p-2 bg-muted/30">
+                                <span className="text-sm">{suggestion}</span>
+                                <Button 
+                                  size="sm" 
+                                  variant="ghost"
+                                  className="h-6"
+                                  onClick={() => addRelatedTask(suggestion, task.category)}
+                                >
+                                  <Plus className="h-3.5 w-3.5 mr-1" />
+                                  Thêm
+                                </Button>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ))
                 )}
