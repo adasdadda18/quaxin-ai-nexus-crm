@@ -5,9 +5,20 @@ import TaskList from "@/components/dashboard/TaskList";
 import ContactsOverview from "@/components/dashboard/ContactsOverview";
 import AIInsights from "@/components/dashboard/AIInsights";
 import ProjectsOverview from "@/components/dashboard/ProjectsOverview";
+import ApiKeyConfig from "@/components/settings/ApiKeyConfig";
 import { CheckSquare, Users, Lightbulb, FolderKanban, TrendingUp } from "lucide-react";
+import { useState, useEffect } from "react";
+import { getApiKey } from "@/services/aiService";
 
 const Index = () => {
+  const [showApiConfig, setShowApiConfig] = useState(false);
+
+  useEffect(() => {
+    // Check if API key is already configured
+    const apiKey = getApiKey();
+    setShowApiConfig(!apiKey);
+  }, []);
+
   return (
     <MainLayout>
       <div className="space-y-6">
@@ -17,6 +28,12 @@ const Index = () => {
             Chào mừng trở lại, hôm nay là ngày 9 tháng 4, 2025
           </p>
         </div>
+
+        {showApiConfig && (
+          <div className="dashboard-section mb-6">
+            <ApiKeyConfig />
+          </div>
+        )}
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 dashboard-section">
           <StatCard 
